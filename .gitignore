@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+env/
+.env
+.env.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 모니터링 출력물 (재생성 가능)
+*.xlsx
+debug_html/
+debug_shots/
+monitoring_results/
+
+# OS
+.DS_Store
+Thumbs.db

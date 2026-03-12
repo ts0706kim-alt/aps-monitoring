@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>APS 모니터링</title>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #0f1419;
+            --card: #1a2332;
+            --border: #2d3a4d;
+            --text: #e6edf3;
+            --muted: #8b949e;
+            --accent: #58a6ff;
+            --accent-hover: #79b8ff;
+            --success: #3fb950;
+            --warning: #d29922;
+        }
+        * {
+            box-sizing: border-box;
+        }
+        body {
+            font-family: 'IBM Plex Sans KR', -apple-system, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            margin: 0;
+            padding: 24px;
+            min-height: 100vh;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        h1 {
+            font-size: 1.5rem;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+        .subtitle {
+            color: var(--muted);
+            font-size: 0.9rem;
+            margin-bottom: 24px;
+        }
+        .actions {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 24px;
+        }
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            font-size: 0.95rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-family: inherit;
+        }
+        .btn-primary {
+            background: var(--accent);
+            color: #0d1117;
+        }
+        .btn-primary:hover:not(:disabled) {
+            background: var(--accent-hover);
+        }
+        .btn-primary:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        .btn-secondary {
+            background: var(--border);
+            color: var(--text);
+        }
+        .btn-secondary:hover:not(:disabled) {
+            background: #3d4d63;
+        }
+        .btn-secondary:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .status {
+            padding: 12px 16px;
+            border-radius: 8px;
+            margin-bottom: 24px;
+            display: none;
+        }
+        .status.loading {
+            display: block;
+            background: rgba(88, 166, 255, 0.15);
+            color: var(--accent);
+        }
+        .status.error {
+            display: block;
+            background: rgba(248, 81, 73, 0.15);
+            color: #f85149;
+        }
+        .status.success {
+            display: block;
+            background: rgba(63, 185, 80, 0.15);
+            color: var(--success);
+        }
+        .spinner {
+            display: inline-block;
+            width: 18px;
+            height: 18px;
+            border: 2px solid rgba(88, 166, 255, 0.3);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            vertical-align: middle;
+            margin-right: 8px;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        .table-wrap {
+            overflow-x: auto;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+        }
+        table {
+            width: 100%;
+            min-width: 900px;
+            border-collapse: collapse;
+            font-size: 0.8rem;
+        }
+        th, td {
+            padding: 12px 16px;
+            text-align: left;
+            border-bottom: 1px solid var(--border);
+        }
+        th {
+            background: var(--card);
+            font-weight: 600;
+            color: var(--muted);
+        }
+        tr:last-child td {
+            border-bottom: none;
+        }
+        tr:hover td {
+            background: rgba(88, 166, 255, 0.05);
+        }
+        td a {
+            color: var(--accent);
+            text-decoration: none;
+        }
+        td a:hover {
+            text-decoration: underline;
+        }
+        .empty-state {
+            text-align: center;
+            padding: 48px 24px;
+            color: var(--muted);
+        }
+        .empty-state p {
+            margin: 0 0 8px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>APS 모니터링</h1>
+        <p class="subtitle">Buds4 Pro 글로벌 채널 리뷰·가격·프로모션 모니터링</p>
+
+        <div class="actions">
+            <button class="btn btn-primary" id="runBtn">모니터링 실행</button>
+            <button class="btn btn-secondary" id="excelBtn" disabled>엑셀 다운로드</button>
+        </div>
+
+        <div class="status" id="status"></div>
+
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>date</th>
+                        <th>country</th>
+                        <th>channel</th>
+                        <th>product_name</th>
+                        <th>final_url</th>
+                        <th>price</th>
+                        <th>currency</th>
+                        <th>rating</th>
+                        <th>review_count</th>
+                        <th>promo_text</th>
+                    </tr>
+                </thead>
+                <tbody id="tbody">
+                    <tr>
+                        <td colspan="10" class="empty-state">
+                            <p>모니터링 실행 버튼을 클릭하면 데이터를 수집합니다.</p>
+                            <p style="font-size:0.85rem">(약 2~4분 소요)</p>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        const runBtn = document.getElementById('runBtn');
+        const excelBtn = document.getElementById('excelBtn');
+        const status = document.getElementById('status');
+        const tbody = document.getElementById('tbody');
+
+        function showStatus(type, msg) {
+            status.className = 'status ' + type;
+            status.innerHTML = msg;
+        }
+
+        excelBtn.addEventListener('click', async () => {
+            if (excelBtn.disabled) return;
+            const prevHtml = excelBtn.innerHTML;
+            excelBtn.disabled = true;
+            excelBtn.innerHTML = '다운로드 중...';
+            try {
+                const res = await fetch('/api/download/excel');
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    showStatus('error', '❌ ' + (err.error || '다운로드 실패'));
+                    return;
+                }
+                const blob = await res.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                const cd = res.headers.get('Content-Disposition');
+                let fname = 'aps_monitoring.xlsx';
+                if (cd) {
+                    const m = cd.match(/filename\*?=(?:UTF-8'')?([^'";\n]+)/i) || cd.match(/filename=([^'";\n]+)/i);
+                    if (m) fname = m[1].trim().replace(/^["']|["']$/g, '');
+                }
+                a.download = fname;
+                a.click();
+                URL.revokeObjectURL(url);
+                showStatus('success', '✅ 엑셀 파일 다운로드 완료');
+            } catch (e) {
+                showStatus('error', '❌ 다운로드 오류: ' + e.message);
+            }
+            excelBtn.disabled = false;
+            excelBtn.innerHTML = prevHtml;
+        });
+
+        runBtn.addEventListener('click', async () => {
+            runBtn.disabled = true;
+            excelBtn.disabled = true;
+            showStatus('loading', '<span class="spinner"></span>모니터링 수집 중... (1~2분 소요)');
+
+            try {
+                const res = await fetch('/api/run', { method: 'POST' });
+                const json = await res.json();
+
+                if (json.ok) {
+                    showStatus('success', '✅ 모니터링 완료 (' + json.data.length + '개 채널)');
+                    renderTable(json.data);
+                    excelBtn.disabled = false;
+                } else {
+                    showStatus('error', '❌ ' + (json.error || '실패'));
+                }
+            } catch (e) {
+                showStatus('error', '❌ 오류: ' + e.message);
+            }
+            runBtn.disabled = false;
+        });
+
+        function renderTable(data) {
+            tbody.innerHTML = data.map(row => `
+                <tr>
+                    <td>${escapeHtml(String(row.date || '-'))}</td>
+                    <td>${escapeHtml(String(row.country || '-'))}</td>
+                    <td>${escapeHtml(String(row.channel || '-'))}</td>
+                    <td title="${escapeHtml(String(row.product_name || ''))}">${truncate(row.product_name, 30)}</td>
+                    <td><a href="${escapeHtml(row.final_url || '#')}" target="_blank" rel="noopener">링크</a></td>
+                    <td>${escapeHtml(String(row.price || '-'))}</td>
+                    <td>${escapeHtml(String(row.currency || '-'))}</td>
+                    <td>${escapeHtml(String(row.rating !== undefined && row.rating !== null ? row.rating : '-'))}</td>
+                    <td>${escapeHtml(String(row.review_count !== undefined && row.review_count !== null ? row.review_count : '-'))}</td>
+                    <td title="${escapeHtml(String(row.promo_text || ''))}">${truncate(row.promo_text, 35)}</td>
+                </tr>
+            `).join('');
+        }
+
+        function truncate(s, len) {
+            if (!s) return '-';
+            return s.length > len ? s.slice(0, len) + '…' : s;
+        }
+        function escapeHtml(s) {
+            if (!s) return '';
+            const div = document.createElement('div');
+            div.textContent = s;
+            return div.innerHTML;
+        }
+    </script>
+</body>
+</html>
