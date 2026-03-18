@@ -45,7 +45,24 @@
         .actions {
             display: flex;
             gap: 12px;
-            margin-bottom: 24px;
+            margin-bottom: 16px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        .product-select {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.85rem;
+            color: var(--muted);
+        }
+        .product-select select {
+            background: var(--card);
+            color: var(--text);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 6px 10px;
+            font-size: 0.85rem;
         }
         .btn {
             padding: 12px 24px;
@@ -164,6 +181,14 @@
         <p class="subtitle">Buds4 Pro 글로벌 채널 리뷰·가격·프로모션 모니터링</p>
 
         <div class="actions">
+            <div class="product-select">
+                <span>상품:</span>
+                <select id="productSelect">
+                    <option value="Buds4 Pro">Buds4 Pro</option>
+                    <option value="AirPods Pro 3">AirPods Pro 3</option>
+                    <option value="all">전체 (Buds4 + AirPods)</option>
+                </select>
+            </div>
             <button class="btn btn-primary" id="runBtn">모니터링 실행</button>
             <button class="btn btn-secondary" id="excelBtn" disabled>엑셀 다운로드</button>
         </div>
@@ -200,6 +225,7 @@
 
     <script>
         const runBtn = document.getElementById('runBtn');
+        const productSelect = document.getElementById('productSelect');
         const excelBtn = document.getElementById('excelBtn');
         const status = document.getElementById('status');
         const tbody = document.getElementById('tbody');
@@ -248,7 +274,11 @@
             showStatus('loading', '<span class="spinner"></span>모니터링 수집 중... (1~2분 소요)');
 
             try {
-                const res = await fetch('/api/run', { method: 'POST' });
+                const res = await fetch('/api/run', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ product: productSelect.value })
+                });
                 const json = await res.json();
 
                 if (json.ok) {

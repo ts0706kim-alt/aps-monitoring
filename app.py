@@ -14,7 +14,7 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
     except Exception:
         pass
 
-from flask import Flask, render_template, jsonify, send_file
+from flask import Flask, render_template, jsonify, send_file, request
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
 from openpyxl.utils import get_column_letter
@@ -101,7 +101,19 @@ def run_monitoring_api():
         if not os.path.exists(csv_path):
             return jsonify({"ok": False, "error": "targets.csv 또는 config.csv가 없습니다."}), 400
 
+        # 어떤 상품을 모니터링할지 선택 (Buds4 Pro / AirPods Pro 3 / all)
+        selected_product = None
+        try:
+            payload = request.get_json(silent=True) or {}
+            selected_product = (payload.get("product") or "").strip() or None
+        except Exception:
+            selected_product = None
+
         targets = load_targets_from_csv(csv_path)
+        if selected_product and selected_product.lower() != "all":
+            targets = [t for t in targets if (t.product_name or "").strip().lower() == selected_product.strip().lower()]
+            if not targets:
+                return jsonify({"ok": False, "error": f"'{selected_product}' 상품에 대한 타깃이 없습니다."}), 400
         df = run_monitor(targets, save_excel_path=None)
 
         cols = [c for c in OUTPUT_COLUMNS if c in df.columns]

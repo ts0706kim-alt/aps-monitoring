@@ -47,6 +47,14 @@ pip install -r requirements.txt
 playwright install chromium
 ```
 
+### (Windows) 가장 쉬운 설치 방법
+
+PowerShell에서 아래 한 번만 실행하면 됩니다.
+
+```powershell
+.\setup_windows.ps1
+```
+
 ## 설정
 
 `targets.csv`에 모니터링할 URL을 지정합니다.
@@ -79,6 +87,46 @@ python app.py
 ```bash
 run_app.bat
 ```
+
+### 콘솔(엑셀 생성)로 실행
+
+```bash
+run_monitor.bat
+```
+
+## 데일리 자동 실행 (Windows)
+
+매일 정해진 시각에 모니터링을 자동 실행하려면 **Windows 작업 스케줄러**에 등록하면 됩니다.
+
+### 1. 등록
+
+PowerShell에서 프로젝트 폴더로 이동한 뒤 실행합니다.
+
+```powershell
+.\register_daily_task.ps1
+```
+
+- 기본: **매일 오전 9시**에 `run_monitor_scheduled.bat` 실행
+- 실행 시각 변경: `.\register_daily_task.ps1 -Time "18:30"` (오후 6시 30분)
+- 작업 이름 변경: `.\register_daily_task.ps1 -TaskName "My-APS-Daily"`
+
+### 2. 확인/수정
+
+- **작업 스케줄러** (`Win + R` → `taskschd.msc`) 실행
+- **작업 스케줄러 라이브러리**에서 `APS-Monitoring-Daily` 찾기
+- 더블클릭하여 트리거(실행 시각), 조건, 설정 변경 가능
+
+### 3. 해제
+
+```powershell
+.\unregister_daily_task.ps1
+```
+
+### 스케줄 실행 시 참고
+
+- **로그**: 매 실행 시 `logs` 폴더에 `monitor_YYYYMMDD_HHMMSS.log` 로 저장됩니다.
+- **결과 파일**: `playwright_monitor.py`가 생성하는 엑셀은 프로젝트 폴더의 `aps_monitoring_result.xlsx`(또는 타임스탬프 붙은 파일)에 저장됩니다.
+- **PC 전원**: 노트북이라면 “절전 시에도 작업 실행 허용” 등은 작업 스케줄러에서 해당 작업 속성 → **조건** 탭에서 설정할 수 있습니다.
 
 ## 출력 컬럼
 

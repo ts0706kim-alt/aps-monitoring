@@ -7,6 +7,9 @@ __pycache__/
 venv/
 .venv/
 env/
+Include/
+Lib/
+Scripts/
 .env
 .env.local
 
@@ -21,6 +24,7 @@ env/
 debug_html/
 debug_shots/
 monitoring_results/
+logs/
 
 # OS
 .DS_Store

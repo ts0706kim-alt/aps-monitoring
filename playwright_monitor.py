@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-APS 모니터링 - Playwright 기반 (Best Buy, Amazon, Samsung, Currys, Mediamarkt)
+APS 모니터링 - Playwright 기반 (Amazon, Samsung, Currys, Best Buy, Mediamarkt)
 """
 import os
 import sys
@@ -248,7 +248,11 @@ def save_debug_artifacts(page, target: MonitorTarget) -> Dict[str, Optional[str]
 
 def load_targets_from_csv(csv_path: str) -> List[MonitorTarget]:
     """targets.csv 또는 config.csv 로드 (config.csv는 Country,Sub,Channel,URL,Product_Name)"""
-    df = pd.read_csv(csv_path)
+    # 인코딩 문제 대응: 먼저 UTF-8, 실패 시 CP949 등으로 재시도
+    try:
+        df = pd.read_csv(csv_path)
+    except UnicodeDecodeError:
+        df = pd.read_csv(csv_path, encoding="cp949", errors="replace")
     targets: List[MonitorTarget] = []
 
     # 컬럼 정규화 (config.csv vs targets.csv)
@@ -327,6 +331,13 @@ class BestBuyScraper(BaseScraper):
         try:
             self.init_page(page, target)
 
+            # Best Buy: 가격/리뷰 영역 로딩 대기 (동적 렌더링)
+            try:
+                page.wait_for_selector("span[class*='text-style-body-md-400'], .rnr-stats, [data-testid='customer-price']", timeout=12000)
+            except Exception:
+                pass
+            page.wait_for_timeout(2000)
+
             html = page.content()
             soup = BeautifulSoup(html, "lxml")
 
@@ -349,32 +360,105 @@ class BestBuyScraper(BaseScraper):
                     result.source_type = result.source_type or "embedded_json"
 
             result.product_name = result.product_name or find_first_text(page, ["h1"])
+            # 가격: span.font-sans.text-default.text-style-body-md-400 ($209.99 / $249.99)
             price_text = find_first_text(page, [
+                'span.font-sans.text-default.text-style-body-md-400.font-500',
+                'span.font-sans.text-default.text-style-body-md-400',
+                'span[aria-hidden="true"][class*="text-style-body-md-400"]',
+                'span[class*="text-style-body-md-400"]',
                 ".priceView-customer-price span[aria-hidden='true']",
-                ".priceView-customer-price span",
                 "[data-testid='customer-price']",
-                "div.brix span.font-sans",
                 "[class*='priceView'] span",
             ])
             result.raw_price_text = price_text
             result.price = result.price or normalize_price(price_text)
             result.currency = result.currency or detect_currency(price_text, target.country)
 
-            rating_text = find_first_text(page, [
-                '[aria-label*="rating"]',
-                'p.visually-hidden',
-                '[class*="rating"]',
-            ])
-            if rating_text and not result.rating:
-                result.rating = normalize_rating(extract_number_from_text(rating_text))
+            # 리뷰: .rnr-stats 내 p.visually-hidden ("Rating 5 out of 5 stars with 4 reviews") 또는 .order-1 / .c-reviews
+            if not result.rating or not result.review_count:
+                rnr = page.locator(".rnr-stats").first
+                if rnr.count() > 0:
+                    try:
+                        vis = rnr.locator("p.visually-hidden").first
+                        if vis.count() > 0:
+                            vtext = vis.inner_text(timeout=2000) or ""
+                            # "Rating 5 out of 5 stars with 4 reviews" / "Rating 4.8 out of 5 stars with 6974 reviews"
+                            rm = re.search(r"Rating\s+(\d+[.,]?\d*)\s+out\s+of\s+5\s+stars?\s+with\s+([\d,]+)\s+reviews?", vtext, re.I)
+                            if rm:
+                                if not result.rating:
+                                    result.rating = normalize_rating(rm.group(1))
+                                if not result.review_count:
+                                    result.review_count = normalize_review_count(rm.group(2))
+                        if not result.rating:
+                            ord1 = rnr.locator("span.order-1").first
+                            if ord1.count() > 0:
+                                result.rating = result.rating or normalize_rating(ord1.inner_text(timeout=1500))
+                        if not result.review_count:
+                            crev = rnr.locator("span.c-reviews").first
+                            if crev.count() > 0:
+                                result.review_count = result.review_count or normalize_review_count(crev.inner_text(timeout=1500))
+                    except Exception:
+                        pass
+            if not result.rating:
+                rating_text = find_first_text(page, [
+                    'span.font-weight-bold.order-1',
+                    'span.font-weight-medium.order-1',
+                    'span[class*="font-weight-bold"].order-1',
+                    '.rnr-stats span.order-1',
+                    '[aria-label*="rating"]',
+                    'p.visually-hidden',
+                ])
+                if rating_text:
+                    result.rating = normalize_rating(extract_number_from_text(rating_text))
+            if not result.review_count:
+                review_text = find_first_text(page, [
+                    'span.c-reviews.order-2',
+                    '.rnr-stats span.c-reviews',
+                    'span.c-reviews',
+                    'a[href*="reviews"]',
+                    '[aria-label*="reviews"]',
+                ])
+                if review_text:
+                    result.review_count = normalize_review_count(review_text)
 
-            review_text = find_first_text(page, [
-                'a[href*="reviews"]',
-                '[aria-label*="reviews"]',
-                '[class*="review"]',
-            ])
-            if review_text and not result.review_count:
-                result.review_count = normalize_review_count(review_text)
+            # Best Buy 보조: 페이지 내 JS로 직접 쿼리 (동적 로딩 대응)
+            if not result.price or not result.rating or not result.review_count:
+                try:
+                    bb = page.evaluate("""() => {
+                        const priceEl = document.querySelector('span[class*="text-style-body-md-400"]') || document.querySelector('[data-testid="customer-price"]');
+                        const ratingEl = document.querySelector('span.order-1') || document.querySelector('span[class*="font-weight-bold"].order-1');
+                        const reviewEl = document.querySelector('span.c-reviews') || document.querySelector('span.c-reviews.order-2');
+                        return {
+                            price: priceEl ? priceEl.innerText.trim() : null,
+                            rating: ratingEl ? ratingEl.innerText.trim() : null,
+                            review: reviewEl ? reviewEl.innerText.trim() : null
+                        };
+                    }""")
+                    if bb and isinstance(bb, dict):
+                        if bb.get("price") and not result.price:
+                            result.price = normalize_price(bb["price"])
+                            result.currency = result.currency or detect_currency(bb["price"], target.country)
+                        if bb.get("rating") and not result.rating:
+                            result.rating = normalize_rating(bb["rating"])
+                        if bb.get("review") and not result.review_count:
+                            result.review_count = normalize_review_count(bb["review"])
+                except Exception:
+                    pass
+            # 페이지 텍스트에서 $XXX.XX / (N reviews) 정규식 fallback
+            if not result.price or not result.review_count:
+                try:
+                    body_text = page.locator("body").inner_text(timeout=5000) or ""
+                    if not result.price and re.search(r"\$[\d,]+\.?\d*", body_text):
+                        m = re.search(r"\$([\d,]+\.?\d*)", body_text)
+                        if m:
+                            result.price = normalize_price(m.group(0))
+                            result.currency = result.currency or "USD"
+                    if not result.review_count:
+                        mm = re.search(r"\(([\d,]+)\s*reviews?\)", body_text, re.I)
+                        if mm:
+                            result.review_count = normalize_review_count(mm.group(1))
+                except Exception:
+                    pass
 
             result.promo_text = find_first_text(page, [
                 "text=/save/i",
@@ -679,6 +763,355 @@ class SamsungScraper(BaseScraper):
                 elif price_text:
                     result.raw_price_text = price_text
 
+            # UK Samsung: 리스트 페이지(all-audio-sound)에서 첫 번째 카드 Galaxy Buds4 Pro의 평점(4.8)·리뷰수(668) 추출 (리다이렉트 없음)
+            if (target.country or "").upper() == "UK":
+                try:
+                    # 리스트 페이지: 첫 번째 Galaxy Buds4 Pro 카드에서 front 노출 평점(4.8)·리뷰수(668) 추출
+                    if "all-audio-sound" in (page.url or ""):
+                        page.wait_for_selector(".rating, strong.rating__point, em.rating__review-count", timeout=15000)
+                        page.wait_for_timeout(2000)
+                        # 1) 구조: .rating > .rating__inner > strong.rating__point > span(4.8), em.rating__review-count > span(668) — 첫 .rating 블록 사용
+                        first_rating = page.locator(".rating").first
+                        if first_rating.count() > 0:
+                            pt_el = first_rating.locator("strong.rating__point span:not(.hidden)").first
+                            rc_el = first_rating.locator("em.rating__review-count span:not(.hidden)").first
+                            if pt_el.count() > 0 and not result.rating:
+                                result.rating = normalize_rating(pt_el.inner_text(timeout=2000))
+                            if rc_el.count() > 0 and not result.review_count:
+                                n = normalize_review_count(rc_el.inner_text(timeout=2000))
+                                if n and 10 <= n <= 100000:
+                                    result.review_count = n
+                        if first_rating.count() > 0 and (not result.rating or not result.review_count):
+                            pt_el = first_rating.locator("strong.rating__point span").last
+                            rc_el = first_rating.locator("em.rating__review-count span").last
+                            if pt_el.count() > 0 and not result.rating:
+                                result.rating = normalize_rating(pt_el.inner_text(timeout=2000))
+                            if rc_el.count() > 0 and not result.review_count:
+                                n = normalize_review_count(rc_el.inner_text(timeout=2000))
+                                if n and 10 <= n <= 100000:
+                                    result.review_count = n
+                        # 2) JS: 첫 번째 Buds4 Pro 링크를 포함한 카드 innerText에서 4.8, 668 추출 (fallback)
+                        if (not result.rating or not result.review_count):
+                            first_card_data = page.evaluate("""() => {
+                            var link = document.querySelector("a[href*='galaxy-buds4-pro']");
+                            if (!link) return null;
+                            var card = link.closest("article") || link.closest("li") || link.parentElement;
+                            if (!card) card = link;
+                            var text = (card.innerText || card.textContent || "").replace(/\\s+/g, " ");
+                            var ratingM = text.match(/([4-5]\\.[0-9])\\s*(?:out\\s+of\\s+5|\\/\\s*5)?/);
+                            var rating = ratingM ? ratingM[1] : null;
+                            var reviewM = text.match(/([\\d,]+)\\s+Reviews?\\b/);
+                            if (!reviewM) reviewM = text.match(/\\(([\\d,]+)\\)/);
+                            var count = null;
+                            if (reviewM) {
+                                var num = parseInt((reviewM[1] || "").replace(/,/g, ""), 10);
+                                if (num >= 100 && num <= 10000) count = String(num);
+                            }
+                            return { rating: rating, count: count };
+                        }""")
+                        if first_card_data and isinstance(first_card_data, dict):
+                            if first_card_data.get("rating") and not result.rating:
+                                result.rating = normalize_rating(first_card_data["rating"])
+                            if first_card_data.get("count"):
+                                result.review_count = normalize_review_count(first_card_data["count"])
+                        # DOM: Buds4 Pro 카드 = galaxy-buds4-pro 링크 상위 컨테이너 내 .rating__point / .rating__review-count
+                        if (not result.rating or not result.review_count):
+                            card = page.locator("a[href*='galaxy-buds4-pro']").first.locator("xpath=ancestor::*[.//strong[contains(@class,'rating__point')]][1]")
+                            if card.count() > 0:
+                                pt = card.locator("strong.rating__point span").last
+                                rc = card.locator("em.rating__review-count span").last
+                                if pt.count() > 0 and not result.rating:
+                                    result.rating = normalize_rating(pt.inner_text(timeout=2000))
+                                if rc.count() > 0 and not result.review_count:
+                                    n = normalize_review_count(rc.inner_text(timeout=2000))
+                                    if n and 10 <= n <= 100000:
+                                        result.review_count = n
+                        if (not result.rating or not result.review_count) and page.locator("strong.rating__point").count() > 0:
+                            pt = page.locator("strong.rating__point span").last
+                            rc = page.locator("em.rating__review-count span").last
+                            if pt.count() > 0 and not result.rating:
+                                result.rating = normalize_rating(pt.inner_text(timeout=2000))
+                            if rc.count() > 0 and not result.review_count:
+                                n = normalize_review_count(rc.inner_text(timeout=2000))
+                                if n and 10 <= n <= 100000:
+                                    result.review_count = n
+                        # 리스팅 전체에서 "XXX Reviews" (100~10000) 패턴으로 리뷰 수 추출
+                        if (not result.review_count or (result.review_count or 0) < 100):
+                            try:
+                                listing_text = page.locator("main, [role='main'], .content, body").first.inner_text(timeout=3000) or ""
+                                for m in re.finditer(r"([\d,]+)\s+Reviews\b", listing_text):
+                                    cnt = normalize_review_count(m.group(1))
+                                    if cnt and 100 <= cnt <= 10000:
+                                        result.review_count = cnt
+                                        break
+                            except Exception:
+                                pass
+                    # 상품 페이지 또는 리스팅에서 공통: .rating__point / .rating__review-count (UK 페이지 공통 구조)
+                    if not result.rating or not result.review_count:
+                        pt = page.locator("strong.rating__point span").last
+                        rc = page.locator("em.rating__review-count span").last
+                        if pt.count() > 0 and not result.rating:
+                            result.rating = normalize_rating(pt.inner_text(timeout=2000))
+                        if rc.count() > 0 and not result.review_count:
+                            result.review_count = normalize_review_count(rc.inner_text(timeout=2000))
+                except Exception:
+                    pass
+                try:
+                    page.wait_for_selector(
+                        "section#bv-reviews-overall-ratings-container, section[aria-label='Overall Rating'], "
+                        ".bc-cross-navigation-review-wrap, #reviews_summary",
+                        timeout=10000,
+                    )
+                    page.wait_for_timeout(2000)
+                except Exception:
+                    pass
+                try:
+                    # 0) Galaxy Buds4 Pro 리뷰수: Shadow DOM 내 Overall Rating 섹션의 "Read 668 Reviews" 버튼 우선
+                    bv_overall = page.evaluate("""() => {
+                        const host = document.querySelector("#reviewsbv");
+                        const root = host && (host.shadowRoot || host.querySelector("div") && host.querySelector("div").shadowRoot);
+                        if (!root) return null;
+                        const section = root.querySelector("#bv-reviews-overall-ratings-container") || root.querySelector("section[aria-label='Overall Rating']");
+                        if (!section) return null;
+                        const btn = section.querySelector("button[title*='Read']");
+                        const title = btn ? btn.getAttribute("title") : "";
+                        const innerText = section.innerText || "";
+                        const ratingMatch = innerText.match(/([\\d.]+)\\s*(?:out\\s+of\\s+5|\\/\\s*5)?/);
+                        const rating = ratingMatch ? ratingMatch[1] : null;
+                        let count = null;
+                        if (title && /Read\\s+([\\d,]+)\\s+Reviews?/i.test(title))
+                            count = title.replace(/Read\\s+([\\d,]+)\\s+Reviews?/i, "$1").trim();
+                        if (!count && innerText) {
+                            const all = [];
+                            const re = /([\\d,]+)\\s+Reviews\\b/g;
+                            let m;
+                            while ((m = re.exec(innerText)) !== null) all.push(m[1]);
+                            if (all.length) count = all.reduce(function(a, b) {
+                                var na = parseInt(String(a).replace(/,/g, ""), 10);
+                                var nb = parseInt(String(b).replace(/,/g, ""), 10);
+                                return nb > na ? b : a;
+                            });
+                        }
+                        return { rating: rating, count: count };
+                    }""")
+                    if bv_overall and isinstance(bv_overall, dict):
+                        if bv_overall.get("rating") and not result.rating:
+                            result.rating = normalize_rating(bv_overall["rating"])
+                        cnt = normalize_review_count(bv_overall.get("count"))
+                        if cnt and 10 <= cnt <= 100000:
+                            result.review_count = cnt
+                except Exception:
+                    pass
+                try:
+                    # 0b) Light DOM Featured Reviews - Overall Rating (평점 4.8, 리뷰 668)
+                    overall = page.locator("section#bv-reviews-overall-ratings-container, section[aria-label='Overall Rating']").first
+                    if overall.count() > 0 and (not result.rating or not result.review_count):
+                        block_text = overall.inner_text(timeout=2000) or ""
+                        if not result.rating:
+                            m = re.search(r"(\d+[.,]\d+)\s*(?:out\s+of\s+5|/5)?", block_text)
+                            if m:
+                                r = normalize_rating(m.group(1))
+                                if r and 1 <= r <= 5:
+                                    result.rating = r
+                        if not result.rating:
+                            scope = overall.locator("div[itemscope]").first
+                            if scope.count() > 0:
+                                first_div = scope.locator("div").first
+                                if first_div.count() > 0:
+                                    rt = first_div.inner_text(timeout=1500)
+                                    if rt:
+                                        result.rating = normalize_rating(rt)
+                        btn = overall.locator('button[title*="Read"]').first
+                        if btn.count() > 0:
+                            title = btn.get_attribute("title") or ""
+                            mm = re.search(r"Read\s+([\d,]+)\s+Reviews?", title, re.I)
+                            if mm:
+                                cnt = normalize_review_count(mm.group(1))
+                                if cnt and 10 <= cnt <= 100000:
+                                    result.review_count = cnt
+                        if not result.review_count and block_text:
+                            candidates = re.findall(r"([\d,]+)\s+Reviews\b", block_text)
+                            if candidates:
+                                best = max((normalize_review_count(c) or 0 for c in candidates), default=None)
+                                if best and 10 <= best <= 100000:
+                                    result.review_count = best
+                except Exception:
+                    pass
+                try:
+                    # 1) #reviews_summary / .bc-cross-navigation-review-wrap 내부에서 직접 추출
+                    wrap = page.locator(".bc-cross-navigation-review-wrap").first
+                    if wrap.count() > 0:
+                        r_el = wrap.locator(".bv_avgRating_component_container").first
+                        c_el = wrap.locator(".bv_numReviews_text").first
+                        if r_el.count() > 0 and not result.rating:
+                            result.rating = normalize_rating(r_el.inner_text(timeout=2000))
+                        if c_el.count() > 0 and not result.review_count:
+                            result.review_count = normalize_review_count(c_el.inner_text(timeout=2000))
+                    if not result.rating or not result.review_count:
+                        summary = page.locator("#reviews_summary").first
+                        if summary.count() > 0:
+                            r_el = summary.locator(".bv_avgRating_component_container").first
+                            c_el = summary.locator(".bv_numReviews_text").first
+                            if r_el.count() > 0 and not result.rating:
+                                result.rating = normalize_rating(r_el.inner_text(timeout=2000))
+                            if c_el.count() > 0 and not result.review_count:
+                                result.review_count = normalize_review_count(c_el.inner_text(timeout=2000))
+                except Exception:
+                    pass
+                try:
+                    # 2) JS로 한 번에 조회 (우측 상단 영역 우선)
+                    bv_data = page.evaluate("""() => {
+                        const wrap = document.querySelector(".bc-cross-navigation-review-wrap");
+                        const summary = document.querySelector("#reviews_summary");
+                        const root = wrap || summary || document.body;
+                        const ratingEl = root.querySelector(".bv_avgRating_component_container");
+                        const countEl = root.querySelector(".bv_numReviews_text");
+                        return { rating: ratingEl ? ratingEl.innerText.trim() : null, count: countEl ? countEl.innerText.trim() : null };
+                    }""")
+                    if bv_data and isinstance(bv_data, dict):
+                        if bv_data.get("rating") and not result.rating:
+                            result.rating = normalize_rating(bv_data["rating"])
+                        if bv_data.get("count") and not result.review_count:
+                            result.review_count = normalize_review_count(bv_data["count"])
+                    if not result.rating or not result.review_count:
+                        shadow_text = page.evaluate("""() => {
+                            const host = document.querySelector("#reviewsbv > div") || document.querySelector("#reviewsbv");
+                            const root = host && host.shadowRoot;
+                            if (!root) return null;
+                            const container = root.querySelector("#bv-reviews-overall-ratings-container");
+                            return container ? container.innerText : null;
+                        }""")
+                        if shadow_text and isinstance(shadow_text, str):
+                            if not result.rating:
+                                for m in re.finditer(r"(\d+[.,]\d+)\s*(?:out of 5|/ 5)?", shadow_text):
+                                    r = normalize_rating(m.group(1))
+                                    if r and 1 <= r <= 5:
+                                        result.rating = r
+                                        break
+                            if not result.review_count:
+                                candidates = re.findall(r"([\d,]+)\s+Reviews\b", shadow_text)
+                                if candidates:
+                                    best = max((normalize_review_count(c) or 0 for c in candidates), default=0)
+                                    if 10 <= best <= 100000:
+                                        result.review_count = best
+                                else:
+                                    for m in re.finditer(r"(\d{1,6})\s+reviews?\b", shadow_text, re.I):
+                                        cnt = normalize_review_count(m.group(1))
+                                        if cnt and 10 <= cnt <= 100000:
+                                            result.review_count = result.review_count or cnt
+                                            break
+                except Exception:
+                    pass
+                # 2) light DOM에서 bv_ 클래스 직접 조회
+                if not result.rating:
+                    try:
+                        rating_el = page.locator(".bv_avgRating_component_container").first
+                        if rating_el.count() > 0:
+                            result.rating = normalize_rating(rating_el.inner_text(timeout=2000))
+                    except Exception:
+                        pass
+                if not result.review_count:
+                    try:
+                        count_el = page.locator(".bv_numReviews_text").first
+                        if count_el.count() > 0:
+                            result.review_count = normalize_review_count(count_el.inner_text(timeout=2000))
+                    except Exception:
+                        pass
+                if not result.rating or not result.review_count:
+                    try:
+                        summary = page.locator("#reviews_summary").first
+                        if summary.count() > 0:
+                            block_text = summary.inner_text(timeout=2000) or ""
+                            block_html = summary.inner_html(timeout=2000) or ""
+                            for m in re.finditer(r"(\d+[.,]\d+)\s*(?:out of 5|/ 5|stars?)?", block_text):
+                                r = normalize_rating(m.group(1))
+                                if r and 1 <= r <= 5:
+                                    result.rating = result.rating or r
+                                    break
+                            if not result.rating:
+                                for m in re.finditer(r"(?:Overall\s*Rating|Rating)\s*[:\s]*(\d+[.,]\d+)", block_text, re.I):
+                                    result.rating = normalize_rating(m.group(1))
+                                    break
+                            for m in re.finditer(r"(\d{1,6})\s*reviews?", block_text, re.I):
+                                cnt = normalize_review_count(m.group(1))
+                                if cnt and 1 <= cnt <= 100000:
+                                    result.review_count = result.review_count or cnt
+                                    break
+                            if not result.review_count:
+                                for m in re.finditer(r"\((\d{1,6})\)", block_text):
+                                    cnt = normalize_review_count(m.group(1))
+                                    if cnt and 1 <= cnt <= 100000:
+                                        result.review_count = cnt
+                                        break
+                            if not result.review_count:
+                                for m in re.finditer(r'"reviewCount"\s*:\s*"?(\d+)"?', block_html):
+                                    result.review_count = normalize_review_count(m.group(1))
+                                    break
+                    except Exception:
+                        pass
+                if not result.rating or not result.review_count:
+                    try:
+                        for opener_sel in [
+                            '#review-highlights',
+                            'a[an-la="accordion:featured reviews"]',
+                            '.hubble-pd-expand__opener:has-text("Featured Reviews")',
+                            'a.s-expand__opener:has-text("Featured Reviews")',
+                        ]:
+                            opener = page.locator(opener_sel).first
+                            if opener.count() > 0:
+                                try:
+                                    opener.click(timeout=3000)
+                                    page.wait_for_timeout(1500)
+                                except Exception:
+                                    pass
+                                break
+                    except Exception:
+                        pass
+                if not result.rating or not result.review_count:
+                    for container_selector in [
+                        '#reviews_summary',
+                        '[class*="featured"]',
+                        '[class*="bv_content"]',
+                        '[class*="bv_reviews"]',
+                        '#review-highlights',
+                        '[id="review-highlights"]',
+                        'section:has-text("Overall Rating")',
+                        '[class*="hubble-pd-expand"]',
+                        '[class*="bv_"]',
+                    ]:
+                        try:
+                            container = page.locator(container_selector).first
+                            if container.count() == 0:
+                                continue
+                            block_text = container.inner_text(timeout=2000) or ""
+                            block_html = container.inner_html(timeout=2000) or ""
+                            if "Overall Rating" not in block_text and "Featured" not in block_text and "rating" not in block_text.lower() and "review" not in block_text.lower():
+                                continue
+                            # Rating: 4.8 (1~5)
+                            for m in re.finditer(r"(\d+[.,]\d+)\s*(?:out of 5|/ 5|stars?)?", block_text):
+                                r = normalize_rating(m.group(1))
+                                if r and 1 <= r <= 5:
+                                    result.rating = result.rating or r
+                                    break
+                            if not result.rating:
+                                for m in re.finditer(r"(?:Overall\s*Rating|Rating)\s*[:\s]*(\d+[.,]\d+)", block_text, re.I):
+                                    result.rating = normalize_rating(m.group(1))
+                                    break
+                            # Review count: 680 reviews
+                            for m in re.finditer(r"(\d{1,6})\s*reviews?", block_text, re.I):
+                                cnt = normalize_review_count(m.group(1))
+                                if cnt and 1 <= cnt <= 100000:
+                                    result.review_count = result.review_count or cnt
+                                    break
+                            if not result.review_count:
+                                for m in re.finditer(r'"reviewCount"\s*:\s*"?(\d+)"?', block_html):
+                                    result.review_count = normalize_review_count(m.group(1))
+                                    break
+                            if result.rating and result.review_count:
+                                break
+                        except Exception:
+                            continue
+
             if not result.rating:
                 rating_text = find_first_text(page, [
                     '[aria-label*="rating"]',
@@ -725,6 +1158,17 @@ class SamsungScraper(BaseScraper):
                         if cnt and 1 <= cnt <= 10000:
                             result.review_count = cnt
                             break
+            # UK: "680 reviews" 등 영어 리뷰 개수 (Featured reviews 영역과 무관하게 페이지 어딘가에 있을 수 있음)
+            if (target.country or "").upper() == "UK" and not result.review_count:
+                for m in re.finditer(r"(\d{2,6})\s*reviews?", html, re.I):
+                    cnt = normalize_review_count(m.group(1))
+                    if cnt and 10 <= cnt <= 100000:
+                        result.review_count = cnt
+                        break
+            if (target.country or "").upper() == "UK" and not result.rating:
+                for m in re.finditer(r"Overall\s*Rating[^0-9]*(\d+[.,]\d+)", html, re.I):
+                    result.rating = normalize_rating(m.group(1))
+                    break
 
             result.promo_text = find_first_text(page, [
                 "text=/save/i",
@@ -842,7 +1286,17 @@ class CurrysScraper(BaseScraper):
             result.price = normalize_price(price_text)
             result.currency = detect_currency(price_text, target.country)
 
-            # Reviews 카드(.card.customer-reviews) 내부만 사용 - carousel 88 제외
+            # 리뷰 개수: span.reviews "245 reviews" 우선 (Currys UK AirPods Pro 3 등)
+            reviews_span_text = find_first_text(page, [
+                "span.reviews.text-decoration-underline",
+                "span.reviews",
+                ".reviews.text-decoration-underline",
+                ".reviews",
+            ])
+            if reviews_span_text:
+                result.review_count = normalize_review_count(reviews_span_text) or result.review_count
+
+            # Reviews 카드(.card.customer-reviews) 내부 - rating / .rating-count
             review_card = page.locator(".card.customer-reviews").first
             if review_card.count() > 0:
                 rating_text = find_first_text_in(review_card, [
@@ -850,20 +1304,18 @@ class CurrysScraper(BaseScraper):
                     ".curry-sansreg-headline.average-reviews",
                 ])
                 if rating_text:
-                    result.rating = normalize_rating(extract_number_from_text(rating_text))
-                review_text = find_first_text_in(review_card, [
-                    ".rating-count",
-                ])
+                    result.rating = result.rating or normalize_rating(extract_number_from_text(rating_text))
+                review_text = find_first_text_in(review_card, [".rating-count"])
                 if review_text:
-                    result.review_count = normalize_review_count(review_text)
-                # reevoo만 있고 .review-rating 비어있으면 리뷰 0
+                    result.review_count = result.review_count or normalize_review_count(review_text)
                 if result.review_count is None:
                     try:
                         has_reevoo = review_card.locator("reevoo-embeddable").count() > 0
                         if has_reevoo or review_card.locator(".review-rating").inner_text(timeout=500) == "":
-                            result.review_count = 0
+                            result.review_count = result.review_count or 0
                     except Exception:
-                        result.review_count = 0
+                        if result.review_count is None:
+                            result.review_count = 0
 
             result.promo_text = find_first_text(page, [
                 "text=/save/i",
@@ -902,6 +1354,20 @@ class MediamarktScraper(BaseScraper):
 
         try:
             self.init_page(page, target)
+
+            # 캡차/사람 확인 페이지 감지 시 추출 중단 후 안내 메시지
+            try:
+                body_text = (page.locator("body").inner_text(timeout=5000) or "").lower()
+                title = (page.title() or "").lower()
+                captcha_keywords = ["captcha", "vervollständigen", "robot", "human", "bitte bestätigen", "are you human", "completa el captcha"]
+                if any(k in body_text or k in title for k in captcha_keywords):
+                    result.status = "failed"
+                    result.error_code = "captcha_required"
+                    result.error_message = "캡차 확인 필요 - Mediamarkt에서 수동 확인 후 가격/리뷰를 확인해 주세요."
+                    result.final_url = page.url
+                    return result
+            except Exception:
+                pass
 
             result.product_name = find_first_text(page, [
                 "h1",
