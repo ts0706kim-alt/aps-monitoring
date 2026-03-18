@@ -793,9 +793,52 @@ class SamsungScraper(BaseScraper):
             if (target.country or "").upper() == "UK":
                 try:
                     # 리스트 페이지: 첫 번째 Galaxy Buds4 Pro 카드에서 front 노출 평점(4.8)·리뷰수(668) 추출
-                    if "all-audio-sound" in (target.url or "") or "all-audio-sound" in (page.url or ""):
-                        page.wait_for_selector(".rating, strong.rating__point, em.rating__review-count", timeout=15000)
+                    is_listing = ("all-audio-sound" in (target.url or "")) or ("all-audio-sound" in (page.url or ""))
+                    has_pd21_rating = page.locator("a.pd21-product-card__rating").count() > 0
+                    if is_listing or has_pd21_rating:
+                        # pd21 카드 DOM이 있는 경우가 많아서 우선 대기
+                        page.wait_for_selector(
+                            "a.pd21-product-card__rating, .rating, strong.rating__point, em.rating__review-count",
+                            timeout=15000,
+                        )
                         page.wait_for_timeout(2000)
+
+                        # 0) 가장 우선: 사용자가 제공한 영역 (a.pd21-product-card__rating 내부)
+                        # 예:
+                        # <a class="pd21-product-card__rating" title="4.8, (668), ...">
+                        #   <span class="rating"> ... <strong class="rating__point"><span>4.8</span></strong>
+                        #   <em class="rating__review-count">(<span>668</span>)</em>
+                        # </a>
+                        pd21 = page.locator("a.pd21-product-card__rating").first
+                        if pd21.count() > 0 and (not result.rating or not result.review_count):
+                            try:
+                                pt = pd21.locator("strong.rating__point span:not(.hidden)").last
+                                rc = pd21.locator("em.rating__review-count span:not(.hidden)").last
+                                if pt.count() > 0 and not result.rating:
+                                    result.rating = normalize_rating(pt.inner_text(timeout=2000))
+                                if rc.count() > 0 and not result.review_count:
+                                    n = normalize_review_count(rc.inner_text(timeout=2000))
+                                    if n and 10 <= n <= 100000:
+                                        result.review_count = n
+                            except Exception:
+                                pass
+                        if pd21.count() > 0 and (not result.rating or not result.review_count):
+                            # title="4.8, (668), ..." 에서도 fallback 추출
+                            try:
+                                title = (pd21.get_attribute("title") or "").strip()
+                                # rating: 4.8 / count: 668
+                                if title:
+                                    rm = re.search(r"([1-5](?:[.,]\d+)?)", title)
+                                    cm = re.search(r"\(([\d,]+)\)", title)
+                                    if rm and not result.rating:
+                                        result.rating = normalize_rating(rm.group(1))
+                                    if cm and not result.review_count:
+                                        n = normalize_review_count(cm.group(1))
+                                        if n and 10 <= n <= 100000:
+                                            result.review_count = n
+                            except Exception:
+                                pass
+
                         # 1) 구조: .rating > .rating__inner > strong.rating__point > span(4.8), em.rating__review-count > span(668) — 첫 .rating 블록 사용
                         first_rating = page.locator(".rating").first
                         if first_rating.count() > 0:
