@@ -1,58 +1,71 @@
-# APS 모니터링 (Buds4 Pro)
+# APS 모니터링 (Buds4 Pro & AirPods Pro3)
 
-글로벌 채널(Amazon, Best Buy, Samsung.com, Currys, Mediamarkt 등)에서 **가격**, **리뷰 수**, **평점**, **프로모션**을 수집하는 모니터링 솔루션입니다.
+글로벌 채널(Amazon, Samsung.com, Currys 등)에서 **가격**, **리뷰 수**, **평점**, **프로모션**을 수집하는 모니터링 솔루션입니다.
+
+---
+
+## 다른 사람이 다운로드해서 바로 쓰는 방법 (가장 쉬운 순서)
+
+### 1. Python 설치 (없는 경우만)
+
+- [python.org](https://www.python.org/downloads/) 에서 **Python 3.10 이상** 다운로드 후 설치
+- 설치 시 **"Add Python to PATH"** 체크
+
+### 2. 프로젝트 다운로드
+
+**방법 A – Git 사용 시**
+```bash
+git clone https://github.com/ts0706kim-alt/aps-monitoring.git
+cd aps-monitoring
+```
+
+**방법 B – ZIP으로 받기**
+- GitHub 저장소 페이지에서 **Code → Download ZIP** 클릭
+- ZIP 압축 해제 후 해당 폴더로 이동
+
+### 3. 한 번만 설치 (Windows)
+
+폴더 안에서 **아래 중 하나**만 실행하면 됩니다.
+
+- **`install_once.bat`** 더블클릭  
+  → 가상환경 생성, 패키지 설치, Playwright 브라우저 설치까지 자동 진행
+
+또는 PowerShell을 연 뒤:
+```powershell
+cd "다운로드한_폴더_경로"
+.\setup_windows.ps1
+```
+
+### 4. 실행
+
+- **`run_app.bat`** 더블클릭  
+  → 웹 앱이 실행되면 브라우저에서 **http://127.0.0.1:5000** 접속
+
+**정리:** 처음 한 번만 `install_once.bat` 실행 → 이후에는 `run_app.bat`만 더블클릭하면 됩니다.
+
+---
 
 ## 주요 기능
 
 - **웹 UI**: 브라우저에서 모니터링 실행 및 결과 조회
 - **엑셀 다운로드**: 수집 결과를 `.xlsx`로 저장
 - **Playwright 기반**: JavaScript 렌더링 사이트 지원
-- **다국가**: US, UK, DE 등 3개국 채널 동시 모니터링
+- **다국가**: US, UK 등 채널 동시 모니터링
 
 ## 요구사항
 
-- Python 3.9+
-- Playwright (브라우저 자동화)
+- Python 3.10+
+- Playwright (Chromium) — `install_once.bat` 또는 `setup_windows.ps1` 실행 시 자동 설치
 
-## 설치
-
-### 1. 저장소 클론
+## 수동 설치 (원할 경우)
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/aps-monitoring.git
+git clone https://github.com/ts0706kim-alt/aps-monitoring.git
 cd aps-monitoring
-```
-
-### 2. 가상환경 생성 (권장)
-
-```bash
-python -m venv venv
-
-# Windows
-venv\Scripts\activate
-
-# macOS/Linux
-source venv/bin/activate
-```
-
-### 3. 패키지 설치
-
-```bash
+python -m venv .venv
+.venv\Scripts\activate   # Windows
 pip install -r requirements.txt
-```
-
-### 4. Playwright 브라우저 설치
-
-```bash
 playwright install chromium
-```
-
-### (Windows) 가장 쉬운 설치 방법
-
-PowerShell에서 아래 한 번만 실행하면 됩니다.
-
-```powershell
-.\setup_windows.ps1
 ```
 
 ## 설정
@@ -70,29 +83,18 @@ PowerShell에서 아래 한 번만 실행하면 됩니다.
 
 ## 사용법
 
-### 웹 앱으로 실행
+### 웹 앱으로 실행 (권장)
 
-```bash
-python app.py
-```
-
-브라우저에서 **http://127.0.0.1:5000** 접속 후:
+- **`run_app.bat`** 더블클릭 후 브라우저에서 **http://127.0.0.1:5000** 접속  
+또는 터미널에서 `python app.py` / `py app.py`
 
 1. **모니터링 실행** 버튼 클릭 (약 1~4분 소요)
 2. 결과 테이블 확인
 3. **엑셀 다운로드**로 `.xlsx` 저장
 
-### Windows에서 빠른 실행
+### 콘솔에서만 실행 (엑셀만 생성)
 
-```bash
-run_app.bat
-```
-
-### 콘솔(엑셀 생성)로 실행
-
-```bash
-run_monitor.bat
-```
+- **`run_monitor.bat`** 더블클릭 또는 `python playwright_monitor.py`
 
 ## 데일리 자동 실행 (Windows)
 
