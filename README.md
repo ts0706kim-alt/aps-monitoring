@@ -1,4 +1,4 @@
-# APS 모니터링 (Buds4 Pro & AirPods Pro3)
+# 모니터링 프로그램 (Buds4 Pro & AirPods Pro3)
 
 글로벌 채널(Amazon, Samsung.com, Currys 등)에서 **가격**, **리뷰 수**, **평점**, **프로모션**을 수집하는 모니터링 솔루션입니다.
 
