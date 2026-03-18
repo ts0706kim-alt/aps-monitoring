@@ -10,6 +10,7 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
         sys.stdout.reconfigure(encoding="utf-8")
     except Exception:
         pass
+import csv
 import re
 import json
 import time
@@ -248,33 +249,57 @@ def save_debug_artifacts(page, target: MonitorTarget) -> Dict[str, Optional[str]
 
 def load_targets_from_csv(csv_path: str) -> List[MonitorTarget]:
     """targets.csv 또는 config.csv 로드 (config.csv는 Country,Sub,Channel,URL,Product_Name)"""
-    # 인코딩 문제 대응: 먼저 UTF-8, 실패 시 CP949 등으로 재시도
-    try:
-        df = pd.read_csv(csv_path)
-    except UnicodeDecodeError:
-        df = pd.read_csv(csv_path, encoding="cp949", errors="replace")
-    targets: List[MonitorTarget] = []
+    # 인코딩/파싱 문제 대응: pandas 대신 csv 모듈로 안정적으로 로드
+    encodings_to_try = ["utf-8-sig", "utf-8", "cp949", "cp1252"]
+
+    last_err: Optional[Exception] = None
+    rows: List[Dict[str, str]] = []
+
+    for enc in encodings_to_try:
+        try:
+            with open(csv_path, "r", encoding=enc, errors="replace", newline="") as f:
+                reader = csv.DictReader(f)
+                if not reader.fieldnames:
+                    raise ValueError("CSV header not found")
+                rows = [r for r in reader if r and any((v or "").strip() for v in r.values())]
+            last_err = None
+            break
+        except Exception as e:
+            last_err = e
+            rows = []
+
+    if last_err:
+        raise last_err
 
     # 컬럼 정규화 (config.csv vs targets.csv)
-    country_col = "Country" if "Country" in df.columns else "country"
-    channel_col = "Channel" if "Channel" in df.columns else "channel"
-    url_col = "URL" if "URL" in df.columns else "url"
-    product_col = "Product_Name" if "Product_Name" in df.columns else "product_name"
+    targets: List[MonitorTarget] = []
+    for row in rows:
+        # 대/소문자 혼용 대비
+        keys = {k.strip(): k for k in row.keys() if k}
+        def get_any(*cands: str) -> str:
+            for c in cands:
+                k = keys.get(c)
+                if k is not None:
+                    return (row.get(k) or "").strip()
+            return ""
 
-    for _, row in df.iterrows():
-        url = str(row[url_col]).strip()
-        if not url or url.lower() in ("nan", ""):
+        url = get_any("URL", "url")
+        if not url or url.lower() == "nan":
             continue
 
-        country = str(row.get(country_col, row.get("Sub", ""))).strip()
+        country = get_any("Country", "country") or get_any("Sub")
+        channel = get_any("Channel", "channel")
+        product = get_any("Product_Name", "product_name")
+
         targets.append(
             MonitorTarget(
-                country=country or "US",
-                channel=str(row[channel_col]).strip(),
+                country=(country or "US").strip(),
+                channel=(channel or "").strip(),
                 url=url,
-                product_name=str(row[product_col]).strip() if pd.notna(row.get(product_col)) else None,
+                product_name=product.strip() or None,
             )
         )
+
     return targets
 
 
@@ -763,11 +788,12 @@ class SamsungScraper(BaseScraper):
                 elif price_text:
                     result.raw_price_text = price_text
 
-            # UK Samsung: 리스트 페이지(all-audio-sound)에서 첫 번째 카드 Galaxy Buds4 Pro의 평점(4.8)·리뷰수(668) 추출 (리다이렉트 없음)
+            # UK Samsung: 리스트 페이지(all-audio-sound)에서 첫 번째 카드 Galaxy Buds4 Pro의 평점(4.8)·리뷰수(668) 추출
+            # target.url 기준으로 판단 (리다이렉트 후 page.url이 바뀌어도 리스트 로직 실행)
             if (target.country or "").upper() == "UK":
                 try:
                     # 리스트 페이지: 첫 번째 Galaxy Buds4 Pro 카드에서 front 노출 평점(4.8)·리뷰수(668) 추출
-                    if "all-audio-sound" in (page.url or ""):
+                    if "all-audio-sound" in (target.url or "") or "all-audio-sound" in (page.url or ""):
                         page.wait_for_selector(".rating, strong.rating__point, em.rating__review-count", timeout=15000)
                         page.wait_for_timeout(2000)
                         # 1) 구조: .rating > .rating__inner > strong.rating__point > span(4.8), em.rating__review-count > span(668) — 첫 .rating 블록 사용
