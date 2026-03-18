@@ -809,7 +809,23 @@ class SamsungScraper(BaseScraper):
                         #   <span class="rating"> ... <strong class="rating__point"><span>4.8</span></strong>
                         #   <em class="rating__review-count">(<span>668</span>)</em>
                         # </a>
-                        pd21 = page.locator("a.pd21-product-card__rating").first
+                        # "첫 번째 카드"가 아니라 Buds4 Pro 카드 자체를 특정해서 추출해야 웹에서도 안정적으로 나옴.
+                        # 우선순위: (1) 블랙 SKU href (2) data-modelcode 정확 매치 (3) Buds4 Pro href (4) R640 prefix
+                        pd21_candidates = [
+                            "a.pd21-product-card__rating[href*='galaxy-buds4-pro-black']",
+                            "a.pd21-product-card__rating[href*='sm-r640nzkaeub']",
+                            "a.pd21-product-card__rating[data-modelcode='SM-R640NZKAEUB']",
+                            "a.pd21-product-card__rating[href*='galaxy-buds4-pro']",
+                            "a.pd21-product-card__rating[data-modelcode^='SM-R640']",
+                        ]
+                        pd21 = None
+                        for sel in pd21_candidates:
+                            loc = page.locator(sel).first
+                            if loc.count() > 0:
+                                pd21 = loc
+                                break
+                        if pd21 is None:
+                            pd21 = page.locator("a.pd21-product-card__rating").first
                         if pd21.count() > 0 and (not result.rating or not result.review_count):
                             try:
                                 pt = pd21.locator("strong.rating__point span:not(.hidden)").last
@@ -925,18 +941,21 @@ class SamsungScraper(BaseScraper):
                             result.review_count = normalize_review_count(rc.inner_text(timeout=2000))
                 except Exception:
                     pass
-                try:
-                    page.wait_for_selector(
-                        "section#bv-reviews-overall-ratings-container, section[aria-label='Overall Rating'], "
-                        ".bc-cross-navigation-review-wrap, #reviews_summary",
-                        timeout=10000,
-                    )
-                    page.wait_for_timeout(2000)
-                except Exception:
-                    pass
-                try:
-                    # 0) Galaxy Buds4 Pro 리뷰수: Shadow DOM 내 Overall Rating 섹션의 "Read 668 Reviews" 버튼 우선
-                    bv_overall = page.evaluate("""() => {
+                # 리스트 카드에서 평점/리뷰 수를 이미 안정적으로 가져왔으면(특히 100+),
+                # 이후 BV/Overall Rating 파싱이 더 작은 숫자(예: 2)로 덮어쓰지 않도록 스킵.
+                if (result.review_count or 0) < 100 or (result.rating or 0) <= 0:
+                    try:
+                        page.wait_for_selector(
+                            "section#bv-reviews-overall-ratings-container, section[aria-label='Overall Rating'], "
+                            ".bc-cross-navigation-review-wrap, #reviews_summary",
+                            timeout=10000,
+                        )
+                        page.wait_for_timeout(2000)
+                    except Exception:
+                        pass
+                    try:
+                        # 0) Galaxy Buds4 Pro 리뷰수: Shadow DOM 내 Overall Rating 섹션의 "Read 668 Reviews" 버튼 우선
+                        bv_overall = page.evaluate("""() => {
                         const host = document.querySelector("#reviewsbv");
                         const root = host && (host.shadowRoot || host.querySelector("div") && host.querySelector("div").shadowRoot);
                         if (!root) return null;
@@ -963,49 +982,49 @@ class SamsungScraper(BaseScraper):
                         }
                         return { rating: rating, count: count };
                     }""")
-                    if bv_overall and isinstance(bv_overall, dict):
-                        if bv_overall.get("rating") and not result.rating:
-                            result.rating = normalize_rating(bv_overall["rating"])
-                        cnt = normalize_review_count(bv_overall.get("count"))
-                        if cnt and 10 <= cnt <= 100000:
-                            result.review_count = cnt
-                except Exception:
-                    pass
-                try:
-                    # 0b) Light DOM Featured Reviews - Overall Rating (평점 4.8, 리뷰 668)
-                    overall = page.locator("section#bv-reviews-overall-ratings-container, section[aria-label='Overall Rating']").first
-                    if overall.count() > 0 and (not result.rating or not result.review_count):
-                        block_text = overall.inner_text(timeout=2000) or ""
-                        if not result.rating:
-                            m = re.search(r"(\d+[.,]\d+)\s*(?:out\s+of\s+5|/5)?", block_text)
-                            if m:
-                                r = normalize_rating(m.group(1))
-                                if r and 1 <= r <= 5:
-                                    result.rating = r
-                        if not result.rating:
-                            scope = overall.locator("div[itemscope]").first
-                            if scope.count() > 0:
-                                first_div = scope.locator("div").first
-                                if first_div.count() > 0:
-                                    rt = first_div.inner_text(timeout=1500)
-                                    if rt:
-                                        result.rating = normalize_rating(rt)
-                        btn = overall.locator('button[title*="Read"]').first
-                        if btn.count() > 0:
-                            title = btn.get_attribute("title") or ""
-                            mm = re.search(r"Read\s+([\d,]+)\s+Reviews?", title, re.I)
-                            if mm:
-                                cnt = normalize_review_count(mm.group(1))
-                                if cnt and 10 <= cnt <= 100000:
-                                    result.review_count = cnt
-                        if not result.review_count and block_text:
-                            candidates = re.findall(r"([\d,]+)\s+Reviews\b", block_text)
-                            if candidates:
-                                best = max((normalize_review_count(c) or 0 for c in candidates), default=None)
-                                if best and 10 <= best <= 100000:
-                                    result.review_count = best
-                except Exception:
-                    pass
+                        if bv_overall and isinstance(bv_overall, dict):
+                            if bv_overall.get("rating") and not result.rating:
+                                result.rating = normalize_rating(bv_overall["rating"])
+                            cnt = normalize_review_count(bv_overall.get("count"))
+                            if cnt and 10 <= cnt <= 100000 and (not result.review_count or cnt > (result.review_count or 0)):
+                                result.review_count = cnt
+                    except Exception:
+                        pass
+                    try:
+                        # 0b) Light DOM Featured Reviews - Overall Rating (평점 4.8, 리뷰 668)
+                        overall = page.locator("section#bv-reviews-overall-ratings-container, section[aria-label='Overall Rating']").first
+                        if overall.count() > 0 and (not result.rating or not result.review_count or (result.review_count or 0) < 100):
+                            block_text = overall.inner_text(timeout=2000) or ""
+                            if not result.rating:
+                                m = re.search(r"(\d+[.,]\d+)\s*(?:out\s+of\s+5|/5)?", block_text)
+                                if m:
+                                    r = normalize_rating(m.group(1))
+                                    if r and 1 <= r <= 5:
+                                        result.rating = r
+                            if not result.rating:
+                                scope = overall.locator("div[itemscope]").first
+                                if scope.count() > 0:
+                                    first_div = scope.locator("div").first
+                                    if first_div.count() > 0:
+                                        rt = first_div.inner_text(timeout=1500)
+                                        if rt:
+                                            result.rating = normalize_rating(rt)
+                            btn = overall.locator('button[title*="Read"]').first
+                            if btn.count() > 0:
+                                title = btn.get_attribute("title") or ""
+                                mm = re.search(r"Read\s+([\d,]+)\s+Reviews?", title, re.I)
+                                if mm:
+                                    cnt = normalize_review_count(mm.group(1))
+                                    if cnt and 10 <= cnt <= 100000 and (not result.review_count or cnt > (result.review_count or 0)):
+                                        result.review_count = cnt
+                            if block_text:
+                                candidates = re.findall(r"([\d,]+)\s+Reviews\b", block_text)
+                                if candidates:
+                                    best = max((normalize_review_count(c) or 0 for c in candidates), default=0)
+                                    if best and 10 <= best <= 100000 and (not result.review_count or best > (result.review_count or 0)):
+                                        result.review_count = best
+                    except Exception:
+                        pass
                 try:
                     # 1) #reviews_summary / .bc-cross-navigation-review-wrap 내부에서 직접 추출
                     wrap = page.locator(".bc-cross-navigation-review-wrap").first
