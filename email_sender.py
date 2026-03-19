@@ -15,11 +15,14 @@ from typing import List, Optional
 
 
 def _sanitize_for_email(text: str) -> str:
-    """이메일 헤더/본문에서 ASCII 인코딩 오류를 일으키는 문자 제거 (예: \\u2060 Word Joiner)"""
+    """이메일 헤더에서 허용되지 않는 문자 제거 (개행, Zero-width 등)"""
     if not text or not isinstance(text, str):
         return text
     # Zero-width, Word Joiner, BOM 등 제거
-    return re.sub(r"[\u200b\u200c\u200d\u2060\ufeff]", "", text)
+    s = re.sub(r"[\u200b\u200c\u200d\u2060\ufeff]", "", text)
+    # 개행문자 제거 (헤더에 개행 불가)
+    s = s.replace("\r", "").replace("\n", " ").strip()
+    return s
 
 
 DEFAULT_CONFIG_PATH = "email_config.json"
