@@ -81,6 +81,27 @@ playwright install chromium
 
 기존 `targets.csv`를 수정하거나 `config_template.csv`를 복사해 새로 작성할 수 있습니다.
 
+### 이메일 발송 설정 (데일리 + 이메일 사용 시)
+
+`email_config.json.example`을 복사해 `email_config.json`을 만들고 SMTP 정보를 입력합니다.
+
+```json
+{
+  "smtp_server": "smtp.gmail.com",
+  "smtp_port": 587,
+  "use_tls": true,
+  "username": "your_email@gmail.com",
+  "password": "your_app_password",
+  "from_addr": "your_email@gmail.com",
+  "to_addrs": ["recipient@example.com"],
+  "subject_prefix": "[APS 모니터링] "
+}
+```
+
+- **Gmail**: [앱 비밀번호](https://myaccount.google.com/apppasswords) 생성 후 `password`에 입력
+- **네이버**: `smtp.naver.com`, 포트 587
+- `email_config.json`은 `.gitignore`에 포함되어 있어 저장소에 올라가지 않습니다
+
 ## 사용법
 
 ### 웹 앱으로 실행 (권장)
@@ -108,7 +129,11 @@ PowerShell에서 프로젝트 폴더로 이동한 뒤 실행합니다.
 .\register_daily_task.ps1
 ```
 
-- 기본: **매일 오전 9시**에 `run_monitor_scheduled.bat` 실행
+- 기본: **매일 오전 9시**에 모니터링 실행 (결과만 엑셀 저장)
+- **이메일 발송 포함** (매일 오후 12시, 결과 Excel 첨부):
+  ```powershell
+  .\register_daily_task.ps1 -WithEmail
+  ```
 - 실행 시각 변경: `.\register_daily_task.ps1 -Time "18:30"` (오후 6시 30분)
 - 작업 이름 변경: `.\register_daily_task.ps1 -TaskName "My-APS-Daily"`
 
@@ -127,8 +152,45 @@ PowerShell에서 프로젝트 폴더로 이동한 뒤 실행합니다.
 ### 스케줄 실행 시 참고
 
 - **로그**: 매 실행 시 `logs` 폴더에 `monitor_YYYYMMDD_HHMMSS.log` 로 저장됩니다.
-- **결과 파일**: `playwright_monitor.py`가 생성하는 엑셀은 프로젝트 폴더의 `aps_monitoring_result.xlsx`(또는 타임스탬프 붙은 파일)에 저장됩니다.
+- **결과 파일**: 엑셀은 `aps_monitoring_result.xlsx`(또는 타임스탬프 붙은 파일)에 저장됩니다.
+- **이메일**: `-WithEmail` 옵션 사용 시 결과 Excel이 첨부되어 지정된 수신자에게 발송됩니다.
 - **PC 전원**: 노트북이라면 “절전 시에도 작업 실행 허용” 등은 작업 스케줄러에서 해당 작업 속성 → **조건** 탭에서 설정할 수 있습니다.
+
+## PC 없이 실행 (GitHub Actions)
+
+PC를 켜지 않아도 **GitHub 서버**에서 매일 모니터링을 실행하고 이메일로 결과를 발송할 수 있습니다.
+
+### 1. GitHub Secrets 설정
+
+저장소 → **Settings** → **Secrets and variables** → **Actions** → **New repository secret**
+
+| Secret 이름 | 설명 | 필수 |
+|-------------|------|------|
+| `EMAIL_USERNAME` | SMTP 로그인 이메일 | ✓ |
+| `EMAIL_PASSWORD` | SMTP 비밀번호 (Gmail: 앱 비밀번호) | ✓ |
+| `EMAIL_TO` | 수신자 이메일 (여러 명: `a@x.com,b@y.com`) | ✓ |
+| `EMAIL_FROM` | 발신자 표시 (선택, 기본: EMAIL_USERNAME) | |
+| `EMAIL_SMTP_SERVER` | SMTP 서버 (선택, 기본: smtp.gmail.com) | |
+| `EMAIL_SMTP_PORT` | SMTP 포트 (선택, 기본: 587) | |
+
+### 2. 자동 실행
+
+- **기본**: 매일 **12:00 KST**(한국 시간 정오)에 자동 실행
+- **수동 실행**: 저장소 → **Actions** → **APS Daily Monitor** → **Run workflow**
+
+### 3. 실행 시각 변경
+
+`.github/workflows/daily-monitor.yml`에서 `cron` 값을 수정합니다. (UTC 기준)
+
+```yaml
+# 예: 09:00 KST = 00:00 UTC
+- cron: "0 0 * * *"
+```
+
+### 4. 참고
+
+- 일부 사이트(Amazon 등)는 데이터센터 IP를 차단할 수 있어, GitHub에서 실행 시 실패할 수 있습니다.
+- 실패 시 **Actions** 탭에서 결과 파일을 다운로드할 수 있습니다.
 
 ## 출력 컬럼
 

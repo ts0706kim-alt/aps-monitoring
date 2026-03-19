@@ -1,0 +1,55 @@
+# APS 모니터링 - 매일 실행 후 이메일 발송
+# PC를 켜지 않아도 GitHub에서 자동 실행됩니다.
+# 실행 시각: 매일 12:00 KST (03:00 UTC)
+
+name: APS Daily Monitor
+
+on:
+  schedule:
+    # cron: 분 시 일 월 요일 (UTC 기준)
+    # 03:00 UTC = 12:00 KST (한국 시간 정오)
+    - cron: "0 3 * * *"
+  workflow_dispatch:  # 수동 실행 버튼
+
+jobs:
+  monitor-and-email:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Install Playwright Chromium
+        run: playwright install chromium
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/playwright
+
+      - name: Run monitoring
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/playwright
+          EMAIL_USERNAME: ${{ secrets.EMAIL_USERNAME }}
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+          EMAIL_SMTP_SERVER: ${{ secrets.EMAIL_SMTP_SERVER }}
+          EMAIL_SMTP_PORT: ${{ secrets.EMAIL_SMTP_PORT }}
+        run: python run_daily_with_email.py
+
+      - name: Upload result (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: monitoring-result-${{ github.run_id }}
+          path: aps_monitoring_result*.xlsx
+          if-no-files-found: ignore

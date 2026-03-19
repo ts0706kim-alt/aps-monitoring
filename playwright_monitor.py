@@ -588,54 +588,154 @@ class AmazonScraper(BaseScraper):
 
             result.product_name = find_first_text(page, [
                 "#productTitle",
+                "span#productTitle",
+                "span.product-title-word-break",
+                ".a-size-large.product-title-word-break",
+                "h1#title",
                 "h1",
             ])
+            if result.product_name:
+                result.product_name = result.product_name.strip()
 
             result.price, result.raw_price_text, result.currency = self._extract_amazon_price(
                 page, target.country
             )
 
-            # Customer reviews 영역만 사용 (대체 상품/비슷한 상품 평점 제외)
+            # 1) JSON-LD / embedded script에서 우선 추출 (US/UK/DE 공통, locale 독립)
+            html = page.content()
+            soup = BeautifulSoup(html, "html.parser")
+            jsonld = self.extract_from_jsonld(soup)
+            embedded = self.extract_from_embedded_scripts(soup)
+            if jsonld:
+                if jsonld.get("name") and not result.product_name:
+                    result.product_name = str(jsonld.get("name", "")).strip()
+                result.rating = result.rating or normalize_rating(jsonld.get("rating"))
+                result.review_count = result.review_count or normalize_review_count(jsonld.get("review_count"))
+            if embedded:
+                result.rating = result.rating or normalize_rating(embedded.get("rating"))
+                result.review_count = result.review_count or normalize_review_count(embedded.get("review_count"))
+
+            # 2) "리뷰 없음" 체크 (UK/DE 포함)
             no_reviews = find_first_text(page, [
                 '[data-hook="top-customer-reviews-title"]',
                 'span:has-text("No customer reviews")',
                 'h3:has-text("No customer reviews")',
                 'span:has-text("Be the first to review")',
+                'span:has-text("Noch keine Kundenrezensionen")',
+                'span:has-text("Noch keine Bewertungen")',
             ])
             nr_lower = (no_reviews or "").lower()
-            if no_reviews and ("no customer review" in nr_lower or "be the first to review" in nr_lower):
+            if no_reviews and any(
+                kw in nr_lower
+                for kw in [
+                    "no customer review",
+                    "be the first to review",
+                    "noch keine kundenrezensionen",
+                    "noch keine bewertungen",
+                ]
+            ):
                 result.rating = None
                 result.review_count = None
-            else:
-                # #averageCustomerReviews_feature_div 내부에서만 추출
-                review_div = page.locator("#averageCustomerReviews_feature_div").first
-                if review_div.count() > 0:
-                    rating_text = find_first_text_in(review_div, [
-                        "#acrPopover span.a-icon-alt",
-                        "#acrPopover",
-                        "[data-hook='rating-out-of-text']",
-                    ])
-                    if rating_text:
-                        result.rating = normalize_rating(extract_number_from_text(rating_text))
-                    review_text = find_first_text_in(review_div, [
-                        "#acrCustomerReviewText",
-                        "[data-hook='total-review-count']",
-                    ])
-                    if review_text:
-                        result.review_count = normalize_review_count(review_text)
-                    # Amazon UK 등: "4.2 out of 5 stars (5)" 형식 fallback
-                    if not result.rating or not result.review_count:
+            elif not result.rating or not result.review_count:
+                # 3) DOM 기반 추출 - UK/DE 신규 레이아웃(#cm_cr_dp_d_rating_histogram) 우선
+                review_selectors = [
+                    "#cm_cr_dp_d_rating_histogram",      # UK/DE 새 구조 (cr-ratings-histogram)
+                    "#averageCustomerReviews_feature_div",  # US 기존 구조
+                ]
+                for rev_sel in review_selectors:
+                    review_div = page.locator(rev_sel).first
+                    if review_div.count() > 0:
+                        rating_text = find_first_text_in(review_div, [
+                            "[data-hook='average-star-rating'] span.a-icon-alt",
+                            "[data-hook='rating-out-of-text']",
+                            "#acrPopover span.a-icon-alt",
+                            "#acrPopover",
+                        ])
+                        if rating_text:
+                            result.rating = result.rating or normalize_rating(extract_number_from_text(rating_text))
+                        review_text = find_first_text_in(review_div, [
+                            "[data-hook='total-review-count']",  # "15 global ratings" (UK) 포함
+                            "#acrCustomerReviewText",
+                            "#acrCustomerReviewCount",
+                        ])
+                        if review_text:
+                            result.review_count = result.review_count or normalize_review_count(review_text)
                         div_text = review_div.inner_text(timeout=2000) or ""
+                        # UK: "4.2 out of 5 stars (5)" / "4.6 out of 5"
                         m = re.search(
                             r"([\d.]+)\s+out\s+of\s+5\s+stars?\s*\((\d+)\)",
                             div_text,
                             re.I,
                         )
                         if m:
-                            if not result.rating:
-                                result.rating = normalize_rating(m.group(1))
-                            if not result.review_count:
-                                result.review_count = normalize_review_count(m.group(2))
+                            result.rating = result.rating or normalize_rating(m.group(1))
+                            result.review_count = result.review_count or normalize_review_count(m.group(2))
+                        # UK: "15 global ratings"
+                        if not result.review_count:
+                            m_global = re.search(r"(\d+)\s+global\s+ratings?", div_text, re.I)
+                            if m_global:
+                                result.review_count = normalize_review_count(m_global.group(1))
+                        # DE: "4,2 von 5 Sternen" / "123 Bewertungen"
+                        if not result.rating:
+                            m_de = re.search(r"([\d,]+)\s+von\s+5\s+Sternen?", div_text, re.I)
+                            if m_de:
+                                result.rating = normalize_rating(m_de.group(1).replace(",", "."))
+                        if not result.review_count:
+                            m_cnt = re.search(r"(\d+)\s+Bewertung(?:en)?", div_text, re.I)
+                            if m_cnt:
+                                result.review_count = normalize_review_count(m_cnt.group(1))
+                        if result.rating and result.review_count:
+                            break
+
+                # 4) 전역 fallback (컨테이너 외부에서 data-hook 검색)
+                if not result.rating or not result.review_count:
+                    rating_text = find_first_text(page, [
+                        "[data-hook='average-star-rating'] span.a-icon-alt",
+                        "[data-hook='rating-out-of-text']",
+                        "#acrPopover span.a-icon-alt",
+                        "#acrPopover",
+                        "span.a-icon-alt",
+                    ])
+                    if rating_text:
+                        result.rating = result.rating or normalize_rating(extract_number_from_text(rating_text))
+                    review_text = find_first_text(page, [
+                        "[data-hook='total-review-count']",  # UK: "15 global ratings"
+                        "#acrCustomerReviewText",
+                        "#acrCustomerReviewCount",
+                    ])
+                    if review_text:
+                        result.review_count = result.review_count or normalize_review_count(review_text)
+
+                # 5) HTML 내 정규식 fallback (UK/DE DOM 구조 차이 시)
+                if (not result.rating or not result.review_count) and html:
+                    if not result.rating:
+                        r_m = re.search(
+                            r'([\d.]+)\s*(?:out\s+of|von)\s*5\s*(?:stars?|Sternen?)',
+                            html,
+                            re.I,
+                        )
+                        if r_m:
+                            result.rating = normalize_rating(r_m.group(1))
+                    if not result.review_count:
+                        rc_m = re.search(
+                            r'(\d{1,6})\s*(?:global\s+)?ratings?',
+                            html,
+                            re.I,
+                        )
+                        if not rc_m:
+                            rc_m = re.search(
+                                r'[\(\["](\d{1,6})[\)\]"]\s*(?:reviews?|Bewertungen?)',
+                                html,
+                                re.I,
+                            )
+                        if not rc_m:
+                            rc_m = re.search(
+                                r'(\d{1,6})\s*(?:reviews?|Bewertungen?)',
+                                html,
+                                re.I,
+                            )
+                        if rc_m:
+                            result.review_count = normalize_review_count(rc_m.group(1))
 
             result.promo_text = find_first_text(page, [
                 "text=/save/i",

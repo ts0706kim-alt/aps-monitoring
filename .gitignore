@@ -12,6 +12,7 @@ Lib/
 Scripts/
 .env
 .env.local
+email_config.json
 
 # IDE
 .idea/

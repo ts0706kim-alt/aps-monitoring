@@ -1,0 +1,10 @@
+{
+  "smtp_server": "smtp.gmail.com",
+  "smtp_port": 587,
+  "use_tls": true,
+  "username": "your_email@gmail.com",
+  "password": "your_app_password",
+  "from_addr": "your_email@gmail.com",
+  "to_addrs": ["recipient1@example.com", "recipient2@example.com"],
+  "subject_prefix": "[APS 모니터링] "
+}
